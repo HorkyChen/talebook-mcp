@@ -2,13 +2,7 @@
 """
 Talebook MCP Multi-Transport Server
 
-支持多种流式HTTP传输协议的M        "transports": {
-            "sse": "/sse",
-            "websocket": "/ws",
-            "simple_http": "/simple",
-            "http_stream": "/stream",
-            "long_polling": "/poll"
-        },
+支持多种流式HTTP传输协议的MCP服务器：
 - Server-Sent Events (SSE)
 - WebSocket
 - HTTP Chunked Transfer
@@ -29,66 +23,12 @@ from mcp.server.sse import SseServerTransport
 from mcp.types import Tool, TextContent, InitializeResult
 import httpx
 
+# Import MCP service
+from mcp_service import mcp_service
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Initialize MCP Server
-server = Server("talebook-mcp")
-
-# Set initialization options with session ID
-def create_initialization_options():
-    """Create initialization options with session ID."""
-    session_id = str(uuid.uuid4())
-    logger.info(f"Creating MCP server with session ID: {session_id}")
-
-    return {
-        "protocolVersion": "2024-11-05",
-        "capabilities": {
-            "tools": {}
-        },
-        "serverInfo": {
-            "name": "talebook-mcp",
-            "version": "1.0.0"
-        },
-        "sessionId": session_id
-    }
-
-# Tool definitions
-@server.list_tools()
-async def list_tools() -> list[Tool]:
-    """List available tools."""
-    return [
-        Tool(
-            name="get_books_count",
-            description="Get the current count of books in the collection",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
-        )
-    ]
-
-@server.call_tool()
-async def call_tool(name: str, arguments: dict[str, Any] | None = None) -> Sequence[TextContent]:
-    """Handle tool calls."""
-    if name == "get_books_count":
-        return await get_books_count(arguments or {})
-    else:
-        raise ValueError(f"Unknown tool: {name}")
-
-async def get_books_count(arguments: dict[str, Any]) -> Sequence[TextContent]:
-    """Get the current count of books in the collection."""
-    try:
-        books_count = 1
-        result = f"Current books count: {books_count}"
-        logger.info(f"Books count requested, returning: {books_count}")
-        return [TextContent(type="text", text=result)]
-    except Exception as e:
-        error_msg = f"Error getting books count: {str(e)}"
-        logger.error(error_msg)
-        return [TextContent(type="text", text=error_msg)]
 
 # FastAPI app
 app = FastAPI(
@@ -126,7 +66,11 @@ async def handle_sse(request: Request):
         transport = SseServerTransport("/sse")
         async with transport.connect_sse(request) as streams:
             logger.info("MCP server connected via SSE transport")
-            await server.run(streams[0], streams[1], server.create_initialization_options())
+            await mcp_service.server.run(
+                streams[0],
+                streams[1],
+                mcp_service.create_initialization_options()
+            )
     except Exception as e:
         logger.error(f"Error in SSE handler: {e}")
         raise
@@ -145,35 +89,8 @@ async def websocket_endpoint(websocket: WebSocket):
             request_data = json.loads(data)
             logger.info(f"WebSocket request: {request_data}")
 
-            # Process MCP request
-            if request_data.get("method") in ["tools/list", "mcp:list-tools"]:
-                tools = await list_tools()
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": request_data.get("id"),
-                    "result": {"tools": [{"name": t.name, "description": t.description} for t in tools]}
-                }
-            elif request_data.get("method") in ["tools/call", "mcp:call-tool"]:
-                tool_name = request_data.get("params", {}).get("name")
-                if tool_name == "get_books_count":
-                    result = await get_books_count({})
-                    response = {
-                        "jsonrpc": "2.0",
-                        "id": request_data.get("id"),
-                        "result": {"content": [{"type": "text", "text": result[0].text}]}
-                    }
-                else:
-                    response = {
-                        "jsonrpc": "2.0",
-                        "id": request_data.get("id"),
-                        "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"}
-                    }
-            else:
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": request_data.get("id"),
-                    "error": {"code": -32601, "message": "Method not found"}
-                }
+            # Process MCP request using unified service
+            response = await mcp_service.handle_request(request_data)
 
             # Send response back to client
             await websocket.send_text(json.dumps(response))
@@ -198,54 +115,8 @@ async def handle_simple_http(request: Request):
         request_data = json.loads(body)
         logger.info(f"Simple HTTP request: {request_data}")
 
-        # Process MCP request
-        if request_data.get("method") == "initialize":
-            session_id = str(uuid.uuid4())
-            logger.info(f"Initializing MCP session with ID: {session_id}")
-            response = {
-                "jsonrpc": "2.0",
-                "id": request_data.get("id"),
-                "result": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {
-                        "tools": {}
-                    },
-                    "serverInfo": {
-                        "name": "talebook-mcp",
-                        "version": "1.0.0"
-                    },
-                    "sessionId": session_id
-                }
-            }
-        elif request_data.get("method") in ["tools/list", "mcp:list-tools"]:
-            tools = await list_tools()
-            response = {
-                "jsonrpc": "2.0",
-                "id": request_data.get("id"),
-                "result": {"tools": [{"name": t.name, "description": t.description} for t in tools]}
-            }
-        elif request_data.get("method") in ["tools/call", "mcp:call-tool"]:
-            tool_name = request_data.get("params", {}).get("name")
-            if tool_name == "get_books_count":
-                result = await get_books_count({})
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": request_data.get("id"),
-                    "result": {"content": [{"type": "text", "text": result[0].text}]}
-                }
-            else:
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": request_data.get("id"),
-                    "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"}
-                }
-        else:
-            response = {
-                "jsonrpc": "2.0",
-                "id": request_data.get("id"),
-                "error": {"code": -32601, "message": "Method not found"}
-            }
-
+        # Process MCP request using unified service
+        response = await mcp_service.handle_request(request_data)
         return JSONResponse(response)
 
     except Exception as e:
@@ -270,35 +141,8 @@ async def handle_http_stream(request: Request):
         request_data = json.loads(body)
         logger.info(f"HTTP stream request: {request_data}")
 
-        # Process MCP request
-        if request_data.get("method") in ["tools/list", "mcp:list-tools"]:
-            tools = await list_tools()
-            response = {
-                "jsonrpc": "2.0",
-                "id": request_data.get("id"),
-                "result": {"tools": [{"name": t.name, "description": t.description} for t in tools]}
-            }
-        elif request_data.get("method") in ["tools/call", "mcp:call-tool"]:
-            tool_name = request_data.get("params", {}).get("name")
-            if tool_name == "get_books_count":
-                result = await get_books_count({})
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": request_data.get("id"),
-                    "result": {"content": [{"type": "text", "text": result[0].text}]}
-                }
-            else:
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": request_data.get("id"),
-                    "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"}
-                }
-        else:
-            response = {
-                "jsonrpc": "2.0",
-                "id": request_data.get("id"),
-                "error": {"code": -32601, "message": "Method not found"}
-            }
+        # Process MCP request using unified service
+        response = await mcp_service.handle_request(request_data)
 
         # Return direct JSON response instead of streaming
         return JSONResponse(response)
@@ -331,35 +175,8 @@ async def handle_true_http_stream(request: Request):
             request_data = json.loads(body)
             logger.info(f"True stream request: {request_data}")
 
-            # Process MCP request
-            if request_data.get("method") in ["tools/list", "mcp:list-tools"]:
-                tools = await list_tools()
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": request_data.get("id"),
-                    "result": {"tools": [{"name": t.name, "description": t.description} for t in tools]}
-                }
-            elif request_data.get("method") in ["tools/call", "mcp:call-tool"]:
-                tool_name = request_data.get("params", {}).get("name")
-                if tool_name == "get_books_count":
-                    result = await get_books_count({})
-                    response = {
-                        "jsonrpc": "2.0",
-                        "id": request_data.get("id"),
-                        "result": {"content": [{"type": "text", "text": result[0].text}]}
-                    }
-                else:
-                    response = {
-                        "jsonrpc": "2.0",
-                        "id": request_data.get("id"),
-                        "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"}
-                    }
-            else:
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": request_data.get("id"),
-                    "error": {"code": -32601, "message": "Method not found"}
-                }
+            # Process MCP request using unified service
+            response = await mcp_service.handle_request(request_data)
 
             # Send the response as a single chunk and close
             yield json.dumps(response).encode()
@@ -397,36 +214,8 @@ async def handle_long_polling(request: Request):
         request_data = json.loads(body)
         logger.info(f"Long polling request: {request_data}")
 
-        # Process MCP request immediately for this simple implementation
-        if request_data.get("method") in ["tools/list", "mcp:list-tools"]:
-            tools = await list_tools()
-            response = {
-                "jsonrpc": "2.0",
-                "id": request_data.get("id"),
-                "result": {"tools": [{"name": t.name, "description": t.description} for t in tools]}
-            }
-        elif request_data.get("method") in ["tools/call", "mcp:call-tool"]:
-            tool_name = request_data.get("params", {}).get("name")
-            if tool_name == "get_books_count":
-                result = await get_books_count({})
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": request_data.get("id"),
-                    "result": {"content": [{"type": "text", "text": result[0].text}]}
-                }
-            else:
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": request_data.get("id"),
-                    "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"}
-                }
-        else:
-            response = {
-                "jsonrpc": "2.0",
-                "id": request_data.get("id"),
-                "error": {"code": -32601, "message": "Method not found"}
-            }
-
+        # Process MCP request using unified service
+        response = await mcp_service.handle_request(request_data)
         return JSONResponse(response)
 
     except Exception as e:

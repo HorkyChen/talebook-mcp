@@ -1,0 +1,28 @@
+Note: Unnecessary use of -X or --request, POST is already inferred.
+* Host localhost:3001 was resolved.
+* IPv6: ::1
+* IPv4: 127.0.0.1
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0*   Trying [::1]:3001...
+* connect to ::1 port 3001 from ::1 port 38710 failed: Connection refused
+*   Trying 127.0.0.1:3001...
+* Connected to localhost (127.0.0.1) port 3001
+> POST /stream HTTP/1.1
+> Host: localhost:3001
+> User-Agent: curl/8.5.0
+> Content-Type: application/json
+> Accept: application/json, text/event-stream
+> Content-Length: 243
+> 
+} [243 bytes data]
+< HTTP/1.1 200 OK
+< date: Sun, 13 Jul 2025 08:32:41 GMT
+< server: uvicorn
+< content-length: 200
+< content-type: application/json
+< 
+{ [200 bytes data]
+100   443  100   200  100   243  87642   103k --:--:-- --:--:-- --:--:--  216k
+* Connection #0 to host localhost left intact
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"talebook-mcp","version":"1.0.0"},"sessionId":"0f75cc3b-b293-419c-a567-4563875ac803"}}
