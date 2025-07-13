@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Talebook MCP Server
+Talebook MCP HTTP Server - Standalone
 
-A simple MCP server that provides book-related tools using FastAPI.
+A standalone HTTP MCP server using Server-Sent Events (SSE).
+Run this server separately and connect via HTTP from MCP clients.
 """
 
 import asyncio
@@ -11,11 +12,11 @@ import uuid
 from typing import Any, Sequence
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
 from mcp.server import Server
-from mcp.server.stdio import stdio_server
+from mcp.server.sse import SseServerTransport
 from mcp.types import Tool, TextContent, InitializeResult
-from pydantic import BaseModel
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -72,13 +73,9 @@ async def get_books_count(arguments: dict[str, Any]) -> Sequence[TextContent]:
     Returns 1 as default for this implementation.
     """
     try:
-        # For now, return 1 as the default count
-        # In a real implementation, this would query a database or file system
         books_count = 1
-
         result = f"Current books count: {books_count}"
         logger.info(f"Books count requested, returning: {books_count}")
-
         return [TextContent(type="text", text=result)]
 
     except Exception as e:
@@ -86,52 +83,81 @@ async def get_books_count(arguments: dict[str, Any]) -> Sequence[TextContent]:
         logger.error(error_msg)
         return [TextContent(type="text", text=error_msg)]
 
-# FastAPI app for HTTP interface (optional)
+# FastAPI app
 app = FastAPI(
-    title="Talebook MCP Server",
-    description="A simple MCP server for book management",
+    title="Talebook MCP HTTP Server",
+    description="Standalone MCP server for book management via HTTP/SSE",
     version="1.0.0"
 )
 
 @app.get("/")
 async def root():
-    """Root endpoint for health check."""
-    return {"message": "Talebook MCP Server is running", "status": "healthy"}
+    """Root endpoint with server info."""
+    return {
+        "message": "Talebook MCP HTTP Server",
+        "status": "running",
+        "transport": "sse",
+        "endpoints": {
+            "sse": "/sse",
+            "health": "/"
+        },
+        "tools": ["get_books_count"]
+    }
 
-@app.get("/tools")
-async def get_tools():
-    """Get available tools via HTTP."""
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "healthy", "server": "talebook-mcp"}
+
+@app.post("/sse")
+async def handle_sse(request: Request):
+    """Handle MCP over Server-Sent Events."""
+    logger.info("New SSE connection from MCP client")
+
+    try:
+        transport = SseServerTransport("/sse")
+
+        async with transport.connect_sse(request) as streams:
+            logger.info("MCP server connected via SSE transport")
+            await server.run(
+                streams[0],
+                streams[1],
+                create_initialization_options()
+            )
+
+    except Exception as e:
+        logger.error(f"Error in SSE handler: {e}")
+        raise
+
+@app.get("/info")
+async def server_info():
+    """Get server information."""
     tools = await list_tools()
-    return {"tools": [{"name": tool.name, "description": tool.description} for tool in tools]}
+    return {
+        "server_name": "talebook-mcp",
+        "transport": "sse",
+        "available_tools": [
+            {
+                "name": tool.name,
+                "description": tool.description
+            }
+            for tool in tools
+        ]
+    }
 
-@app.post("/tools/get_books_count")
-async def http_get_books_count():
-    """HTTP endpoint for getting books count."""
-    result = await get_books_count({})
-    return {"result": result[0].text if result else "No result"}
+def main():
+    """Main function to run the standalone HTTP MCP server."""
+    logger.info("🚀 Starting Talebook MCP HTTP Server")
+    logger.info("📡 Server-Sent Events endpoint: http://localhost:3001/sse")
+    logger.info("🔍 Health check: http://localhost:3001/health")
+    logger.info("ℹ️  Server info: http://localhost:3001/info")
 
-async def main():
-    """Main function to run the MCP server."""
-    # Run the MCP server with stdio transport
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(
-            read_stream,
-            write_stream,
-            create_initialization_options()
-        )
-
-def run_fastapi():
-    """Run the FastAPI server."""
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=3001,
+        log_level="info"
+    )
 
 if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) > 1 and sys.argv[1] == "--fastapi":
-        # Run FastAPI server
-        logger.info("Starting FastAPI server on http://0.0.0.0:8000")
-        run_fastapi()
-    else:
-        # Run MCP server with stdio
-        logger.info("Starting MCP server with stdio transport")
-        asyncio.run(main())
+    main()

@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "talebook-mcp": {
-      "command": "python",
-      "args": ["/home/horky/projects/reader/talebook-mcp/src/server.py"],
-      "env": {}
-    }
-  }
-}
